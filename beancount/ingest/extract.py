@@ -11,6 +11,8 @@ import inspect
 import logging
 import sys
 import textwrap
+import os
+import re
 
 from beancount.core import data
 from beancount.parser import printer
@@ -114,6 +116,66 @@ def find_duplicate_entries(new_entries_list, existing_entries):
     return mod_entries_list
 
 
+pat_ticker = re.compile("Assets:Invest.*:[A-Z0-9]*$")
+
+
+def filing_target(entry, output_file_set, output_dir):
+    # Determine file to write to
+    base_acct = None
+    if 'filing_account' in entry.meta:
+        base_acct = entry.meta['filing_account']
+        del entry.meta['filing_account']
+    elif hasattr(entry, 'postings') and len(entry.postings) >= 1:
+        base_acct = entry.postings[0].account
+    elif hasattr(entry, 'account'):
+        base_acct = entry.account
+    else:
+        base_acct = 'noaccount'
+
+    # file Assets:Investments:Brokerage:HOOLI to Assets.Investments.Brokerage.bc
+    if pat_ticker.match(base_acct):
+        base_acct = base_acct.rsplit(':', 1)[0]
+
+    # Determine outfile
+    if base_acct in output_file_set:
+        outfile = output_file_set[base_acct]
+    else:
+        filename = base_acct.replace(':', '.') + ".bc"
+        filename_full = os.path.abspath(output_dir + os.sep + filename)
+        file_exists = os.path.exists(filename_full)
+        outfile = open(filename_full, 'a')
+        if not file_exists:
+            outfile.write(HEADER)
+        output_file_set[base_acct] = outfile
+
+    return outfile
+
+
+def output_extracted_entries_to_account_files(entries, output_dir=None):
+    """Print the entries for the given importer, to one file per account
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    output_file_set = {}
+    # Print out the entries.
+    for entry in entries:
+        outfile = filing_target(entry, output_file_set, output_dir)
+
+        # Check if this entry is a dup, and if so, comment it out.
+        if DUPLICATE_META in entry.meta:
+            meta = entry.meta.copy()
+            meta.pop(DUPLICATE_META)
+            entry = entry._replace(meta=meta)
+            entry_string = textwrap.indent(printer.format_entry(entry), '; ')
+        else:
+            entry_string = printer.format_entry(entry)
+
+        print(entry_string, file=outfile)
+
+    for f in output_file_set.values():
+        f.close()
+
+
 def print_extracted_entries(entries, file):
     """Print a list of entries.
 
@@ -147,6 +209,8 @@ def extract(importer_config,
             options_map=None,
             mindate=None,
             ascending=True,
+            output_one_file_per_account=True,
+            output_dir='ingest_output',
             hooks=None):
     """Given an importer configuration, search for files that can be imported in the
     list of files or directories, run the signature checks on them, and if it
@@ -165,6 +229,8 @@ def extract(importer_config,
       mindate: Optional minimum date to output transactions for.
       ascending: A boolean, true to print entries in ascending order, false if
         descending is desired.
+      output_one_file_per_account: A boolean, true to output entries to individual files split by account.
+      output_dir: A directory name to write to. Only used if output_one_file_per_account enabled.
       hooks: An optional list of hook functions to apply to the list of extract
         (filename, entries) pairs, in order. If not specified, find_duplicate_entries()
         is used, automatically.
@@ -205,13 +271,18 @@ def extract(importer_config,
     assert all(isinstance(new_entries[1], list) for new_entries in new_entries_list)
 
     # Print out the results.
-    output.write(HEADER)
+    if not output_one_file_per_account:
+        output.write(HEADER)
     for key, new_entries in new_entries_list:
-        output.write(identify.SECTION.format(key))
-        output.write('\n')
         if not ascending:
             new_entries.reverse()
-        print_extracted_entries(new_entries, output)
+        
+        if output_one_file_per_account:
+            output_extracted_entries_to_account_files(new_entries, output_dir)
+        else:
+            output.write(identify.SECTION.format(key))
+            output.write('\n')
+            print_extracted_entries(new_entries, output)
 
 
 DESCRIPTION = "Extract transactions from downloads"
@@ -230,6 +301,16 @@ def add_arguments(parser):
                         default=True, const=False,
                         help='Write out the entries in descending order')
 
+    parser.add_argument('-o', '--one-file-per-account', '--one',
+                        action='store_true', dest='output_one_file_per_account',
+                        default=False,
+                        help='Output one file per account')
+
+    parser.add_argument('-d', '--output-dir', '--dir', metavar='OUTPUT_DIR',
+                        dest='output_dir',
+                        default='ingest_output',
+                        help='Output dir (if output one file per account is requested')
+
 
 def run(args, _, importers_list, files_or_directories, hooks=None):
     """Run the subcommand."""
@@ -245,5 +326,7 @@ def run(args, _, importers_list, files_or_directories, hooks=None):
             options_map=options_map,
             mindate=None,
             ascending=args.ascending,
+            output_one_file_per_account=args.output_one_file_per_account,
+            output_dir=args.output_dir,
             hooks=hooks)
     return 0
