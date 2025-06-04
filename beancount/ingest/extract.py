@@ -132,7 +132,7 @@ def filing_target(entry, output_file_set, output_dir):
     else:
         base_acct = 'noaccount'
 
-    # file Assets:Investments:Brokerage:HOOLI to Assets.Investments.Brokerage.bc
+    # file Assets:Investments:Brokerage:HOOLI to Assets.Investments.Brokerage.bean
     if pat_ticker.match(base_acct):
         base_acct = base_acct.rsplit(':', 1)[0]
 
@@ -140,7 +140,7 @@ def filing_target(entry, output_file_set, output_dir):
     if base_acct in output_file_set:
         outfile = output_file_set[base_acct]
     else:
-        filename = base_acct.replace(':', '.') + ".bc"
+        filename = base_acct.replace(':', '.') + ".bean"
         filename_full = os.path.abspath(output_dir + os.sep + filename)
         file_exists = os.path.exists(filename_full)
         outfile = open(filename_full, 'a')
